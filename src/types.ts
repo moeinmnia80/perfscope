@@ -45,9 +45,14 @@ export interface ScriptCoverage {
 export interface RouteSnapshot {
   route: string;
   url: string;
-  vitals: { lcp: number; cls: number; longTasks: number; tbt: number };
-  network: { url: string; type: string; bytes: number }[];
+  vitals: { lcp: number; cls: number; longTasks: number; tbt: number; fcp?: number; ttfb?: number };
+  network: { url: string; type: string; bytes: number; mime?: string; compressed?: boolean }[];
   scripts: ScriptCoverage[];
+  css?: ScriptCoverage[];
+  /** the element the browser picked as Largest Contentful Paint */
+  lcpElement?: { tag: string; src?: string; selector?: string; owner?: string; text?: string };
+  /** true when measured with Slow 4G + 4x CPU slowdown (like Lighthouse mobile) */
+  throttled?: boolean;
   tree: ComponentNode[];
   lists: ListCandidate[];
   images: ImageInfo[];

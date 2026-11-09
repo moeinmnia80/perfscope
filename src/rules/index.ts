@@ -108,6 +108,37 @@ const images: Rule = (s) => {
             }),
       });
 
+    // 2b. old formats (jpeg/png/gif) that are big enough to matter
+    const mime = s.network.find((n) => n.url === i.src)?.mime ?? '';
+    if (/image\/(jpeg|png|gif)/.test(mime) && i.bytes > 30_000)
+      out.push({
+        ...common,
+        id: 'img-format',
+        title: 'Serve images in modern formats (WebP / AVIF)',
+        severity: i.bytes > 150_000 ? 'medium' : 'low',
+        impact: 'Network',
+        why: `Delivered as ${mime.replace('image/', '')} (${kb(i.bytes)}). WebP and AVIF are usually 25-50% smaller for the same quality.`,
+        fix: 'Let next/image convert to AVIF/WebP, or export the file in a modern format.',
+        ...(i.nextImage
+          ? {
+              before: `<Image src={…} alt="${alt}" unoptimized />\n\n// next.config.js had no "formats"`,
+              after: `<Image src={…} alt="${alt}" />\n\n// next.config.js\nimages: { formats: ['image/avif', 'image/webp'] }`,
+              steps: [
+                { kind: 'remove', text: 'Remove the `unoptimized` prop if it is there; it turns optimization off.' },
+                { kind: 'add', text: "Add `images: { formats: ['image/avif', 'image/webp'] }` to `next.config.js`." },
+                { kind: 'check', text: 'If the image is hosted on another domain, add it to `images.remotePatterns` so Next can optimize it.' },
+              ],
+            }
+          : {
+              before: tag,
+              after: tag.replace(/<img/i, '<Image').replace(/\s*\/?>\s*$/, ' />'),
+              steps: [
+                { kind: 'replace', text: 'Replace `<img>` with `next/image`, which serves WebP/AVIF automatically.' },
+                { kind: 'check', text: 'Or convert the file yourself (e.g. squoosh.app) and use the `.webp` / `.avif` version.' },
+              ],
+            }),
+      });
+
     // 3. no reserved space -> layout shift
     if (!i.hasSize)
       out.push({
@@ -135,8 +166,13 @@ const images: Rule = (s) => {
       });
   }
 
-  // 4. the biggest above-the-fold image is probably the LCP element
-  const lcpImg: ImageInfo | undefined = s.images.find((i) => i.aboveFold && i.renderedW > 300);
+  // 4. the image the browser really measured as LCP (falls back to a guess if unknown)
+  const lcpSrc = s.lcpElement?.src;
+  const lcpImg: ImageInfo | undefined = lcpSrc
+    ? s.images.find((i) => i.src === lcpSrc)
+    : s.lcpElement
+      ? undefined
+      : s.images.find((i) => i.aboveFold && i.renderedW > 300);
   if (lcpImg && s.vitals.lcp > 2500 && lcpImg.fetchPriority !== 'high') {
     const tag = tidy(lcpImg.html);
     const alt = lcpImg.alt ?? '';
@@ -149,7 +185,7 @@ const images: Rule = (s) => {
       where: loc(lcpImg.owner, lcpImg.selector, short(lcpImg.src)),
       evidence: tag || undefined,
       asset: short(lcpImg.src, 80),
-      why: `Largest Contentful Paint is ${Math.round(s.vitals.lcp)}ms (good is under 2500ms) and this large image above the fold is the most likely cause. The browser does not know it is important.`,
+      why: `Largest Contentful Paint is ${Math.round(s.vitals.lcp)}ms (good is under 2500ms) and the browser measured THIS image as the LCP element. It is not marked as important, so it is downloaded late.`,
       fix: 'Add `priority` (next/image) or `fetchpriority="high"` to this image.',
       ...(lcpImg.nextImage
         ? {
@@ -176,13 +212,13 @@ const images: Rule = (s) => {
 // ---------------------------------------------------------------- javascript
 const unusedJs: Rule = (s) =>
   s.scripts
-    .filter((c) => c.total > 50_000 && c.used / c.total < 0.5)
+    .filter((c) => c.total - c.used > 20_000)
     .map((c): Finding => {
       const file = c.url.split('/').slice(-1)[0];
       return {
         id: 'unused-js',
         title: 'Load less JavaScript up front',
-        severity: c.total > 200_000 ? 'high' : 'medium',
+        severity: c.total - c.used > 100_000 ? 'high' : 'medium',
         impact: 'TBT',
         route: s.route,
         where: file,
@@ -249,42 +285,233 @@ const rerenders: Rule = (s) =>
       ],
     }));
 
+// ---------------------------------------------------------------- unused css
+const unusedCss: Rule = (s) =>
+  (s.css ?? [])
+    .filter((c) => c.total - c.used > 20_000)
+    .map((c): Finding => {
+      const file = c.url.split('/').slice(-1)[0].split('?')[0];
+      return {
+        id: 'unused-css',
+        title: 'Remove CSS that this page does not use',
+        severity: c.total - c.used > 80_000 ? 'high' : 'medium',
+        impact: 'LCP',
+        route: s.route,
+        where: file,
+        asset: c.url,
+        evidence: `${kb(c.total)} of CSS, ${kb(c.used)} used (${Math.round((c.used / c.total) * 100)}%)`,
+        why: 'CSS blocks rendering. The browser must download and parse all of it before it can paint anything, even rules that never match.',
+        fix: 'Ship only the styles this page needs.',
+        before: `import 'bootstrap/dist/css/bootstrap.css'; // whole framework`,
+        after: `// Tailwind: make sure "content" in tailwind.config only lists your real source folders\ncontent: ['./src/**/*.{ts,tsx}']`,
+        steps: [
+          { kind: 'remove', text: 'Remove global CSS frameworks or icon fonts you only use a little of.' },
+          { kind: 'check', text: 'Tailwind: check `content` in `tailwind.config` so unused classes are purged.' },
+          { kind: 'replace', text: 'Prefer CSS Modules or Tailwind over one huge global stylesheet.' },
+        ],
+      };
+    });
+
+// ---------------------------------------------------------------- network budgets
+const topN = (items: { url: string; bytes: number }[], n = 5) =>
+  [...items]
+    .sort((a, b) => b.bytes - a.bytes)
+    .slice(0, n)
+    .map((x) => `${kb(x.bytes).padStart(7)}  ${short(x.url.split('?')[0], 70)}`)
+    .join('\n');
+
+const jsBudget: Rule = (s) => {
+  const js = s.network.filter((n) => n.type === 'Script');
+  const total = js.reduce((a, b) => a + b.bytes, 0);
+  if (total <= 170 * 1024) return [];
+  return [{
+    id: 'js-budget',
+    title: 'Keep total JavaScript under 170 KB',
+    severity: total > 350 * 1024 ? 'high' : 'medium',
+    impact: 'TBT',
+    route: s.route,
+    where: 'JavaScript bundle',
+    evidence: `${kb(total)} of JavaScript downloaded (${js.length} files). Biggest:\n${topN(js)}`,
+    why: `${kb(total)} of JavaScript is downloaded (compressed). On a mid-range phone every KB also has to be parsed and executed, which blocks taps and delays LCP.`,
+    fix: 'Find the biggest libraries, lazy-load them, or replace them with lighter ones.',
+    before: `import _ from 'lodash';\nimport moment from 'moment';`,
+    after: `import debounce from 'lodash/debounce';\nimport { format } from 'date-fns';\n\n// next.config.js\nexperimental: { optimizePackageImports: ['lucide-react', '@mui/material'] }`,
+    steps: [
+      { kind: 'check', text: 'Run `ANALYZE=true next build` with `@next/bundle-analyzer` and open the biggest chunks listed above.' },
+      { kind: 'replace', text: 'Replace heavy libraries: `moment` → `date-fns` or `dayjs`, whole `lodash` → single functions.' },
+      { kind: 'replace', text: 'Load modals, charts, players and editors with `dynamic(() => import(...))`.' },
+      { kind: 'remove', text: 'Remove `"use client"` from components that have no state or events, so they stay on the server.' },
+      { kind: 'add', text: "Add `optimizePackageImports` in `next.config.js` for icon/UI libraries." },
+    ],
+  }];
+};
+
+const payload: Rule = (s) => {
+  const total = s.network.reduce((a, b) => a + b.bytes, 0);
+  if (total <= 1.6 * 1024 * 1024) return [];
+  return [{
+    id: 'payload',
+    title: 'Reduce the total page weight',
+    severity: total > 3 * 1024 * 1024 ? 'high' : 'medium',
+    impact: 'Network',
+    route: s.route,
+    where: 'all requests',
+    evidence: `${(total / 1024 / 1024).toFixed(1)} MB in ${s.network.length} requests. Heaviest:\n${topN(s.network)}`,
+    why: 'On Slow 4G (about 1.6 Mbps) every 200 KB costs roughly one extra second of loading.',
+    fix: 'Shrink the heaviest requests listed above.',
+    steps: [
+      { kind: 'replace', text: 'Resize and compress images (see the image findings).' },
+      { kind: 'remove', text: 'Remove unused fonts, videos or libraries that load on this route.' },
+      { kind: 'add', text: 'Lazy-load everything that is not visible on the first screen.' },
+    ],
+  }];
+};
+
+const noCompression: Rule = (s) =>
+  s.network
+    .filter((n) => ['Script', 'Stylesheet', 'Document'].includes(n.type) && n.bytes > 2048 && n.compressed === false)
+    .map((n): Finding => ({
+      id: 'no-compression',
+      title: 'Enable text compression (gzip / brotli)',
+      severity: 'high',
+      impact: 'Network',
+      route: s.route,
+      where: short(n.url.split('?')[0], 70),
+      asset: n.url,
+      evidence: `${kb(n.bytes)} sent without a content-encoding header`,
+      why: 'This text file is sent uncompressed. gzip or brotli usually cuts JS, CSS and HTML by 70% or more.',
+      fix: 'Turn on brotli/gzip on the server or CDN.',
+      before: `# response headers\nContent-Type: application/javascript`,
+      after: `# response headers\nContent-Type: application/javascript\nContent-Encoding: br`,
+      steps: [
+        { kind: 'add', text: 'Vercel/Netlify compress automatically. On nginx enable `gzip on;` or the brotli module; on Express use the `compression` middleware.' },
+        { kind: 'check', text: 'Check that a proxy or custom server is not stripping the `Content-Encoding` header.' },
+      ],
+    }));
+
+const thirdParty: Rule = (s) => {
+  let origin: string;
+  try { origin = new URL(s.url).origin; } catch { return []; }
+  const tp = s.network.filter(
+    (n) => n.url.startsWith('http') && !n.url.startsWith(origin) && ['Script', 'Stylesheet'].includes(n.type),
+  );
+  const bytes = tp.reduce((a, b) => a + b.bytes, 0);
+  if (tp.length < 6 && bytes < 100 * 1024) return [];
+  const hosts = [...new Set(tp.map((n) => new URL(n.url).hostname))];
+  return [{
+    id: 'third-party',
+    title: 'Reduce third-party scripts',
+    severity: bytes > 250 * 1024 ? 'high' : 'medium',
+    impact: 'TBT',
+    route: s.route,
+    where: hosts.slice(0, 4).join(', '),
+    evidence: `${tp.length} third-party scripts/styles, ${kb(bytes)}, from ${hosts.length} domains. Biggest:\n${topN(tp, 4)}`,
+    why: 'Analytics, chat widgets and ad scripts run on the same main thread as your app and you do not control their speed.',
+    fix: 'Remove what you do not need and load the rest after the page is interactive.',
+    before: `<script src="https://example.com/widget.js"></script>`,
+    after: `import Script from 'next/script';\n\n<Script src="https://example.com/widget.js" strategy="lazyOnload" />`,
+    steps: [
+      { kind: 'remove', text: 'Remove scripts nobody looks at anymore (old analytics, A/B tools).' },
+      { kind: 'replace', text: 'Replace raw `<script>` tags with `next/script` and `strategy="lazyOnload"` or `"afterInteractive"`.' },
+    ],
+  }];
+};
+
 // ---------------------------------------------------------------- web vitals
+const lcpOther: Rule = (s) => {
+  const el = s.lcpElement;
+  if (s.vitals.lcp <= 2500) return [];
+  const img = el?.src ? s.images.find((i) => i.src === el.src) : undefined;
+  if (img && img.fetchPriority !== 'high') return []; // covered by "lcp-priority"
+  const what = !el ? 'an unknown element' : el.tag === 'img' ? `the image ${short(el.src ?? '', 50)}` : `<${el.tag}>${el.text ? ` "${el.text}"` : ''}`;
+  return [{
+    id: 'lcp',
+    title: 'Make the largest element appear sooner',
+    severity: s.vitals.lcp > 3000 ? 'high' : 'medium',
+    impact: 'LCP',
+    route: s.route,
+    where: el ? loc(el.owner, el.selector) : 'LCP element',
+    evidence: `LCP = ${Math.round(s.vitals.lcp)}ms, element: ${what}`,
+    why: `Largest Contentful Paint is ${Math.round(s.vitals.lcp)}ms (good is under 2500ms). The browser measured ${what} as the LCP. ${img ? 'It is already high priority, so the file itself is probably too big or the server is slow.' : 'It is not an image that can be prioritized, so it usually waits for JavaScript, data or a font.'}`,
+    fix: img ? 'Make the file smaller and the server faster.' : 'Render this content on the server and do not wait for client-side fetching.',
+    before: `'use client';\nuseEffect(() => {\n  fetch('/api/movie').then(setMovie);   // content appears only after JS + fetch\n}, []);`,
+    after: `// page.tsx (Server Component)\nconst movie = await getMovie(id);       // content is already in the HTML\nreturn <Hero movie={movie} />;`,
+    steps: img
+      ? [
+          { kind: 'replace', text: 'Serve a smaller, modern-format file with a correct `sizes` (see the image findings).' },
+          { kind: 'add', text: 'Add `<link rel="preconnect">` to the image CDN domain.' },
+          { kind: 'check', text: 'Check the server response time (TTFB) finding if it is present.' },
+        ]
+      : [
+          { kind: 'remove', text: 'Remove `useEffect` + `fetch` for content that is visible on the first screen.' },
+          { kind: 'replace', text: 'Fetch it in a Server Component (or `generateStaticParams` / ISR) so it arrives in the HTML.' },
+          { kind: 'replace', text: 'Load fonts with `next/font` and `display: "swap"` so text is not hidden.' },
+        ],
+  }];
+};
+
 const vitals: Rule = (s) => {
   const out: Finding[] = [];
-  if (s.vitals.cls > 0.1)
+  const { fcp = 0, ttfb = 0 } = s.vitals;
+  if (fcp > 1800)
     out.push({
-      id: 'cls', title: 'Remove layout shifts', severity: 'high', impact: 'CLS', route: s.route, where: 'whole page',
+      id: 'fcp', title: 'Show the first content sooner', severity: fcp > 3000 ? 'high' : 'medium', impact: 'FCP', route: s.route, where: 'first paint',
+      evidence: `First Contentful Paint = ${Math.round(fcp)}ms`,
+      why: `The first text or image appears after ${Math.round(fcp)}ms (good is under 1800ms). The screen is blank until then.`,
+      fix: 'Remove render-blocking work: big CSS, blocking scripts, slow server.',
+      steps: [
+        { kind: 'remove', text: 'Remove blocking `<script>` tags in `<head>` and big unused CSS.' },
+        { kind: 'replace', text: 'Render the first screen on the server so HTML already contains content.' },
+        { kind: 'check', text: 'See the server response (TTFB) and unused CSS findings.' },
+      ],
+    });
+  if (ttfb > 800)
+    out.push({
+      id: 'ttfb', title: 'Speed up the server response', severity: ttfb > 1800 ? 'high' : 'medium', impact: 'LCP', route: s.route, where: 'server / CDN',
+      evidence: `Time to first byte = ${Math.round(ttfb)}ms`,
+      why: `The server needs ${Math.round(ttfb)}ms to start answering (good is under 800ms). Everything else waits for it.`,
+      fix: 'Cache the page, or move the data fetching closer to the user.',
+      before: `export const dynamic = 'force-dynamic'; // rendered on every request`,
+      after: `export const revalidate = 60; // cached at the edge, refreshed every 60s`,
+      steps: [
+        { kind: 'remove', text: 'Remove `force-dynamic` / `cache: "no-store"` where data can be a minute old.' },
+        { kind: 'add', text: 'Add `revalidate` (ISR) or static generation for pages like movie details.' },
+        { kind: 'check', text: 'Put the database in the same region as the server (Vercel region vs Neon region).' },
+      ],
+    });
+  if (s.vitals.cls > 0.05)
+    out.push({
+      id: 'cls', title: 'Remove layout shifts', severity: s.vitals.cls > 0.1 ? 'high' : 'low', impact: 'CLS', route: s.route, where: 'whole page',
       evidence: `CLS = ${s.vitals.cls.toFixed(3)}`,
       why: `Cumulative Layout Shift is ${s.vitals.cls.toFixed(3)} (good is under 0.1). Content moves while the page loads.`,
       fix: 'Reserve space for images, skeletons and fonts.',
       before: `<img src="/poster.jpg" />\n/* custom font loaded from a <link> */`,
       after: `<Image src="/poster.jpg" width={300} height={450} alt="" />\n\nimport { Inter } from 'next/font/google';\nconst inter = Inter({ subsets: ['latin'], display: 'swap' });`,
       steps: [
-        { kind: 'add', text: 'Give every image and video a width/height or `aspect-ratio` (see the image findings below).' },
+        { kind: 'add', text: 'Give every image and video a width/height or `aspect-ratio` (see the image findings).' },
         { kind: 'replace', text: 'Replace spinners with skeletons that have the same size as the final content.' },
         { kind: 'replace', text: 'Load fonts with `next/font` instead of a `<link>` or `@import`.' },
       ],
     });
-  if (s.vitals.tbt > 300)
+  if (s.vitals.tbt > 200)
     out.push({
-      id: 'tbt', title: 'Reduce main-thread blocking', severity: 'high', impact: 'TBT', route: s.route, where: 'main thread',
+      id: 'tbt', title: 'Reduce main-thread blocking', severity: s.vitals.tbt > 600 ? 'high' : 'medium', impact: 'TBT', route: s.route, where: 'main thread',
       evidence: `Total Blocking Time ≈ ${Math.round(s.vitals.tbt)}ms, ${s.vitals.longTasks} long tasks`,
-      why: `The main thread was blocked for about ${Math.round(s.vitals.tbt)}ms. Taps and scrolls feel slow during this time.`,
+      why: `The main thread was blocked for about ${Math.round(s.vitals.tbt)}ms (good is under 200ms). Taps and scrolls feel slow during this time.`,
       fix: 'Ship less client JavaScript.',
       before: `'use client';\n\nexport default function Page() { /* static content + one button */ }`,
       after: `// page.tsx (Server Component, no "use client")\nexport default function Page() {\n  return <><StaticContent /><LikeButton /></>;\n}\n\n// LikeButton.tsx\n'use client';\nexport function LikeButton() { … }`,
       steps: [
         { kind: 'remove', text: 'Remove `"use client"` from components that only show data and have no state or events.' },
         { kind: 'add', text: 'Keep `"use client"` only on small leaf components (buttons, forms).' },
-        { kind: 'check', text: 'See the "Load less JavaScript up front" finding for big files.' },
+        { kind: 'check', text: 'See the JavaScript budget and unused JavaScript findings for big files.' },
       ],
     });
-  if (s.domTotal > 1500)
+  if (s.domTotal > 800)
     out.push({
-      id: 'dom-size', title: 'Reduce the number of DOM elements', severity: s.domTotal > 3000 ? 'high' : 'medium', impact: 'Render', route: s.route, where: 'DOM',
+      id: 'dom-size', title: 'Reduce the number of DOM elements', severity: s.domTotal > 1400 ? 'high' : 'medium', impact: 'Render', route: s.route, where: 'DOM',
       evidence: `${s.domTotal} DOM nodes`,
-      why: `${s.domTotal} DOM nodes. Above about 1500, style and layout calculations become noticeable.`,
+      why: `${s.domTotal} DOM nodes. Lighthouse warns above 800 and fails above 1400 because style and layout calculations get slower.`,
       fix: 'Virtualize or paginate lists and remove needless wrapper elements.',
       before: `<div><div><div><span>{title}</span></div></div></div>`,
       after: `<span>{title}</span>`,
@@ -296,5 +523,8 @@ const vitals: Rule = (s) => {
   return out;
 };
 
-export const rules: Rule[] = [virtualizeLists, images, unusedJs, heavyComponents, rerenders, vitals];
+export const rules: Rule[] = [
+  virtualizeLists, images, unusedJs, unusedCss, heavyComponents, rerenders,
+  lcpOther, vitals, jsBudget, payload, noCompression, thirdParty,
+];
 export const analyze = (s: RouteSnapshot): Finding[] => rules.flatMap((r) => r(s));

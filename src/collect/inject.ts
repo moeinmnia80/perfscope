@@ -40,13 +40,17 @@ export function injectHook() {
     },
   });
 
-  w.__PS_VITALS__ = { lcp: 0, cls: 0, longTasks: 0, tbt: 0 };
+  w.__PS_VITALS__ = { lcp: 0, cls: 0, longTasks: 0, tbt: 0, fcp: 0 };
   const obs = (type: string, cb: (e: any) => void) => {
     try {
       new PerformanceObserver((l) => l.getEntries().forEach(cb)).observe({ type, buffered: true });
     } catch {}
   };
-  obs('largest-contentful-paint', (e) => (w.__PS_VITALS__.lcp = e.startTime));
+  obs('largest-contentful-paint', (e) => {
+    w.__PS_VITALS__.lcp = e.startTime;
+    w.__PS_LCP_EL__ = e.element || null; // the real LCP element
+  });
+  obs('paint', (e) => { if (e.name === 'first-contentful-paint') w.__PS_VITALS__.fcp = e.startTime; });
   obs('layout-shift', (e) => { if (!e.hadRecentInput) w.__PS_VITALS__.cls += e.value; });
   obs('longtask', (e) => {
     w.__PS_VITALS__.longTasks++;

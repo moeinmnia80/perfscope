@@ -17,6 +17,7 @@ perfscope <url> [options]
   --limit <n>       max routes to analyze (default: 12)
   --desktop         desktop viewport (default: mobile)
   --pdf             also export PDF
+  --no-throttle     measure on your own machine speed (default: Slow 4G + 4x CPU like Lighthouse)
   --fail-on <sev>   exit 1 when a finding has this severity or higher (high|medium|low)
   -h, --help
 `;
@@ -28,6 +29,7 @@ const { values, positionals } = parseArgs({
     limit: { type: 'string', default: '12' },
     desktop: { type: 'boolean', default: false },
     pdf: { type: 'boolean', default: false },
+    'no-throttle': { type: 'boolean', default: false },
     'fail-on': { type: 'string' },
     help: { type: 'boolean', short: 'h', default: false },
   },
@@ -71,7 +73,7 @@ async function main() {
     for (const r of routes) {
       const page = await ctx.newPage(); // fresh page per route so measurements stay clean
       try {
-        snapshots.push(await collectRoute(page, origin, r));
+        snapshots.push(await collectRoute(page, origin, r, { throttle: !values['no-throttle'], desktop: values.desktop }));
         console.log('ok  ', r);
       } catch (e) {
         console.warn('fail', r, (e as Error).message);

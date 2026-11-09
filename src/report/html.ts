@@ -104,7 +104,7 @@ const CLIENT = String.raw`
 const $=(s)=>document.querySelector(s);
 const h=(tag,a,...kids)=>{const e=document.createElement(tag);for(const k in(a||{})){const v=a[k];if(v==null||v===false)continue;
  if(k==='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else e.setAttribute(k,v)}
- for(const c of kids.flat()){if(c==null||c===false)continue;e.append(c.nodeType?c:document.createTextNode(String(c)))}return e};
+ for(const c of kids.flat(Infinity)){if(c==null||c===false)continue;e.append(c.nodeType?c:document.createTextNode(String(c)))}return e};
 const TICK='\x60';
 const rich=(t)=>t.split(TICK).map((p,i)=>i%2?h('code',{},p):p);
 const SEV={high:3,medium:2,low:1};
@@ -113,7 +113,8 @@ const kb=(b)=>(b/1024).toFixed(0)+' KB';
 const grade=(n)=>n>=90?'good':n>=50?'mid':'bad';
 const mg=(v,g,p)=>v<=g?'good':v<=p?'mid':'bad';
 const sc=(v,g,p)=>v<=g?100-10*v/g:v<=p?90-40*(v-g)/(p-g):Math.max(0,50-50*(v-p)/p);
-const score=(v)=>Math.round(.35*sc(v.lcp,2500,4000)+.35*sc(v.tbt,200,600)+.3*sc(v.cls,.1,.25));
+const score=(v)=>{const p=[[.25,sc(v.lcp,2500,4000)],[.3,sc(v.tbt,200,600)],[.25,sc(v.cls,.1,.25)]];if(v.fcp)p.push([.1,sc(v.fcp,1800,3000)]);
+ const W=p.reduce((a,x)=>a+x[0],0);return Math.round(p.reduce((a,x)=>a+x[0]*x[1],0)/W)};
 let cur=D.snapshots.length?D.snapshots[0].route:'';let filter='all';
 
 function gauge(n,size){
@@ -167,18 +168,20 @@ function render(){
  const cnt=(k)=>all.filter((f)=>f.severity===k).length;
  main.append(
   h('section',{class:'hero'},gauge(n,128),h('div',{},h('h1',{},s.route),h('p',{},s.url),
-   h('p',{},'Estimated performance score from LCP, TBT and CLS on this route. It is a quick guide, not an official Lighthouse score.'),
+   h('p',{},'Estimated from FCP, LCP, TBT and CLS. '+(s.throttled?'Measured with Slow 4G and 4x CPU slowdown, like Lighthouse mobile. ':'Measured without throttling, so numbers look better than on a real phone. ')+'Use it as a guide; the official score comes from Lighthouse or PageSpeed Insights.'),
    h('div',{class:'legend'},h('span',{class:'l1'},'0–49 poor'),h('span',{class:'l2'},'50–89 needs work'),h('span',{class:'l3'},'90–100 good')))),
   h('section',{class:'metrics'},
-   [['Largest Contentful Paint',(v.lcp/1000).toFixed(2)+' s',mg(v.lcp,2500,4000),'good ≤ 2.5 s'],
-    ['Cumulative Layout Shift',v.cls.toFixed(3),mg(v.cls,.1,.25),'good ≤ 0.1'],
+   [v.fcp?['First Contentful Paint',(v.fcp/1000).toFixed(2)+' s',mg(v.fcp,1800,3000),'good ≤ 1.8 s']:null,
+    ['Largest Contentful Paint',(v.lcp/1000).toFixed(2)+' s',mg(v.lcp,2500,4000),'good ≤ 2.5 s'],
     ['Total Blocking Time',Math.round(v.tbt)+' ms',mg(v.tbt,200,600),'good ≤ 200 ms'],
-    ['JavaScript downloaded',kb(js),mg(js,300*1024,600*1024),'good ≤ 300 KB'],
-    ['DOM elements',String(s.domTotal),mg(s.domTotal,1500,3000),'good ≤ 1500']]
+    ['Cumulative Layout Shift',v.cls.toFixed(3),mg(v.cls,.1,.25),'good ≤ 0.1'],
+    ['JavaScript downloaded',kb(js),mg(js,170*1024,350*1024),'good ≤ 170 KB'],
+    v.ttfb?['Server response (TTFB)',Math.round(v.ttfb)+' ms',mg(v.ttfb,800,1800),'good ≤ 800 ms']:null,
+    ['DOM elements',String(s.domTotal),mg(s.domTotal,800,1400),'good ≤ 800']].filter(Boolean)
    .map(([a,b,g,t])=>h('div',{class:'metric '+g},h('span',{},a),h('b',{},b),h('small',{},t)))),
   h('h2',{},'Findings',h('span',{class:'pill'},all.length),
    h('span',{class:'chips'},['all','high','medium','low'].map((k)=>{const c=h('button',{class:'chip'+(filter===k?' on':''),type:'button'},k==='all'?'All':k+' ('+cnt(k)+')');c.addEventListener('click',()=>{filter=k;render()});return c}))),
-  fs.length?groups(fs).map(audit):h('div',{class:'ok'},all.length?'No findings with this severity.':'Nothing to fix on this route. Nice work.'));
+  ...(fs.length?groups(fs).map(audit):[h('div',{class:'ok'},all.length?'No findings with this severity.':'Nothing to fix on this route. Nice work.')]));
  const max=Math.max(1,...flat(s.tree).map((x)=>x.domNodes));
  const holder=h('div',{});
  const draw=(q)=>{holder.replaceChildren();

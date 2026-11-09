@@ -2,16 +2,52 @@ import type { Page } from 'playwright';
 import { injectHook } from './inject.js';
 import type { RouteSnapshot } from '../types.js';
 
-export async function collectRoute(page: Page, origin: string, path: string): Promise<RouteSnapshot> {
+export interface CollectOptions {
+  /** simulate a slow phone/network like Lighthouse (default true) */
+  throttle?: boolean;
+  desktop?: boolean;
+}
+
+export async function collectRoute(
+  page: Page,
+  origin: string,
+  path: string,
+  opts: CollectOptions = {},
+): Promise<RouteSnapshot> {
+  const throttle = opts.throttle ?? true;
   // tsx/esbuild may emit a `__name` helper inside serialized functions; define it in the browser
   await page.addInitScript('window.__name = window.__name || ((f) => f);');
 
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Network.enable');
 
-  const reqs = new Map<string, { url: string; type: string }>();
+  // Same profiles Lighthouse uses: mobile = Slow 4G + 4x CPU slowdown, desktop = fast cable.
+  // Without this a fast dev machine reports a much better LCP/TBT than real users get.
+  if (throttle) {
+    const p = opts.desktop
+      ? { latency: 40, down: (10 * 1024 * 1024) / 8, up: (10 * 1024 * 1024) / 8, cpu: 1 }
+      : { latency: 150, down: (1.6 * 1024 * 1024) / 8, up: (750 * 1024) / 8, cpu: 4 };
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: p.cpu });
+    await cdp.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: p.latency,
+      downloadThroughput: p.down,
+      uploadThroughput: p.up,
+    });
+  }
+
+  const reqs = new Map<string, { url: string; type: string; mime?: string; compressed?: boolean }>();
   const network: RouteSnapshot['network'] = [];
   cdp.on('Network.requestWillBeSent', (e: any) => reqs.set(e.requestId, { url: e.request.url, type: e.type }));
+  cdp.on('Network.responseReceived', (e: any) => {
+    const r = reqs.get(e.requestId);
+    if (!r) return;
+    const headers = Object.fromEntries(
+      Object.entries(e.response.headers ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]),
+    );
+    r.mime = e.response.mimeType;
+    r.compressed = /gzip|br|zstd|deflate/i.test(headers['content-encoding'] ?? '');
+  });
   cdp.on('Network.loadingFinished', (e: any) => {
     const r = reqs.get(e.requestId);
     if (r) network.push({ ...r, bytes: e.encodedDataLength });
@@ -19,8 +55,9 @@ export async function collectRoute(page: Page, origin: string, path: string): Pr
 
   await page.addInitScript(injectHook);
   await page.coverage.startJSCoverage({ resetOnNavigation: false });
+  await page.coverage.startCSSCoverage({ resetOnNavigation: false });
 
-  await page.goto(origin + path, { waitUntil: 'networkidle' });
+  await page.goto(origin + path, { waitUntil: 'networkidle', timeout: 90_000 });
 
   // gradual scroll so lazy content and infinite lists load
   await page.evaluate(async () => {
@@ -34,6 +71,14 @@ export async function collectRoute(page: Page, origin: string, path: string): Pr
   await page.waitForLoadState('networkidle').catch(() => {});
 
   const coverage = await page.coverage.stopJSCoverage();
+  const cssCoverage = await page.coverage.stopCSSCoverage();
+  const css = cssCoverage
+    .filter((c) => c.url.startsWith('http') && c.url !== page.url())
+    .map((c) => ({
+      url: c.url,
+      total: c.text?.length ?? 0,
+      used: c.ranges.reduce((s, r) => s + (r.end - r.start), 0),
+    }));
   const scripts = coverage
     .filter((c) => c.url.startsWith('http'))
     .map((c) => ({
@@ -139,14 +184,28 @@ export async function collectRoute(page: Page, origin: string, path: string): Pr
       owner: ownerOf(img),
     }));
 
+    // the element the browser really measured as LCP
+    const lcpNode = w.__PS_LCP_EL__ as Element | null | undefined;
+    const lcpElement = lcpNode
+      ? {
+          tag: lcpNode.tagName.toLowerCase(),
+          src: (lcpNode as HTMLImageElement).currentSrc || undefined,
+          selector: (lcpNode.parentElement ? selOf(lcpNode.parentElement) + ' > ' : '') + selOf(lcpNode),
+          owner: ownerOf(lcpNode),
+          text: lcpNode.tagName === 'IMG' ? undefined : (lcpNode.textContent ?? '').trim().slice(0, 60),
+        }
+      : undefined;
+    const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+
     return {
+      lcpElement,
       tree,
       lists,
       images,
-      vitals: w.__PS_VITALS__,
+      vitals: { ...w.__PS_VITALS__, ttfb: nav?.responseStart ?? 0 },
       domTotal: document.getElementsByTagName('*').length,
     };
   });
 
-  return { route: path, url: origin + path, network, scripts, ...dom };
+  return { route: path, url: origin + path, network, scripts, css, throttled: throttle, ...dom };
 }
