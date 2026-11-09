@@ -1,8 +1,11 @@
 {
-  "name": "perfscope",
+  "name": "@moeinmnia/perfscope",
   "version": "0.2.0",
   "description": "Per-route React component graph and automatic performance analysis for Next.js/React apps",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "perfscope": "dist/cli.js"
   },
@@ -32,12 +35,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/moeinmnia/perfscope.git"
+    "url": "git+https://github.com/moeinmnia80/perfscope.git"
   },
   "bugs": {
-    "url": "https://github.com/moeinmnia/perfscope/issues"
+    "url": "https://github.com/moeinmnia80/perfscope/issues"
   },
-  "homepage": "https://github.com/moeinmnia/perfscope#readme",
+  "homepage": "https://github.com/moeinmnia80/perfscope#readme",
   "dependencies": {
     "playwright": "^1.48.0"
   },
