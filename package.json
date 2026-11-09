@@ -32,12 +32,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/moeinmnia/perfscope.git"
+    "url": "git+https://github.com/moeinmnia80/perfscope.git"
   },
   "bugs": {
-    "url": "https://github.com/moeinmnia/perfscope/issues"
+    "url": "https://github.com/moeinmnia80/perfscope/issues"
   },
-  "homepage": "https://github.com/moeinmnia/perfscope#readme",
+  "homepage": "https://github.com/moeinmnia80/perfscope#readme",
   "dependencies": {
     "playwright": "^1.48.0"
   },
