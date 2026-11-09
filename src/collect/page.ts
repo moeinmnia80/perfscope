@@ -77,6 +77,27 @@ export async function collectRoute(page: Page, origin: string, path: string): Pr
     };
     const tree = [...(w.__PS_ROOTS__ ?? [])].flatMap((root: any) => walk(root.current.child, 0));
 
+    // --- helpers that tell the developer WHERE an element lives in the source ---
+
+    // "div.card > img.poster": short CSS path. Tailwind classes with : [ ] / are skipped (not valid in selectors).
+    const selOf = (el: Element): string => {
+      const cls = (el.getAttribute('class') ?? '').trim().split(/\s+/)
+        .filter((c) => c && !/[:\[\]\/]/.test(c)).slice(0, 3);
+      return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + cls.map((c) => '.' + c).join('');
+    };
+
+    // nearest React component above a DOM element, skipping next/image internals
+    const SKIP = new Set(['Image', 'ImageElement', 'ImageComponent', 'Anonymous']);
+    const ownerOf = (el: any): string | undefined => {
+      const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+      for (let f = key ? el[key] : null; f; f = f.return) {
+        if (!TAGS.has(f.tag)) continue;
+        const n = nameOf(f.type);
+        if (n && !SKIP.has(n)) return n;
+      }
+      return undefined;
+    };
+
     const lists: any[] = [];
     document.querySelectorAll('body *').forEach((el) => {
       const kids = el.children;
@@ -91,6 +112,7 @@ export async function collectRoute(page: Page, origin: string, path: string): Pr
             (el.className ? '.' + el.className.toString().trim().split(/\s+/).slice(0, 2).join('.') : ''),
           items: same,
           heightPx: Math.round(el.getBoundingClientRect().height),
+          owner: ownerOf(el),
         });
       }
     });
@@ -100,10 +122,21 @@ export async function collectRoute(page: Page, origin: string, path: string): Pr
       src: img.currentSrc || img.src,
       renderedW: Math.round(img.getBoundingClientRect().width),
       naturalW: img.naturalWidth,
+      naturalH: img.naturalHeight,
       lazy: img.loading === 'lazy',
       aboveFold: img.getBoundingClientRect().top < vh,
-      hasSize: !!(img.getAttribute('width') && img.getAttribute('height')) || img.style.aspectRatio !== '',
+      // next/image with `fill` has no width/height attributes but the parent reserves the space
+      hasSize:
+        !!(img.getAttribute('width') && img.getAttribute('height')) ||
+        img.style.aspectRatio !== '' ||
+        img.getAttribute('data-nimg') === 'fill',
       bytes: perf.find((p) => p.name === (img.currentSrc || img.src))?.encodedBodySize ?? 0,
+      selector: (img.parentElement ? selOf(img.parentElement) + ' > ' : '') + selOf(img),
+      html: img.outerHTML.slice(0, 600),
+      alt: img.getAttribute('alt'),
+      nextImage: img.hasAttribute('data-nimg'),
+      fetchPriority: img.fetchPriority,
+      owner: ownerOf(img),
     }));
 
     return {
