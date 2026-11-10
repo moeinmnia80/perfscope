@@ -79,6 +79,7 @@ code{background:var(--code);padding:1px 5px;border-radius:5px;font:12px ui-monos
 .where{direction:ltr;text-align:left;font:12.5px ui-monospace,Menlo,monospace;word-break:break-all}
 .why{margin:0;color:var(--tx)}
 .ba{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ba.wide{grid-template-columns:1fr}
 @media(max-width:720px){.ba{grid-template-columns:1fr}}
 .cb{border-radius:10px;overflow:hidden;border:1px solid var(--line);min-width:0}
 .cb header{display:flex;justify-content:space-between;align-items:center;padding:5px 10px;font-size:11px;font-weight:700;background:var(--code)}
@@ -96,6 +97,21 @@ pre{margin:0;padding:10px 12px;overflow:auto;direction:ltr;text-align:left;font:
 .tmeta{color:var(--mut);font-size:11px}
 .tkids{margin-inline-start:12px;padding-inline-start:10px;border-inline-start:1px dashed var(--line)}
 .empty{color:var(--mut)}
+.facts{width:100%;border-collapse:collapse;font-size:13px;margin:2px 0 4px}
+.facts td{padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+.facts td:first-child{color:var(--mut);white-space:nowrap;width:1%;padding-inline-end:16px}
+.facts tr:last-child td{border-bottom:0}
+.note{background:var(--midbg);border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px}
+.min{color:var(--mut);font-style:italic}
+.imgs{width:100%;border-collapse:collapse;font-size:12.5px}
+.imgs th{text-align:left;color:var(--mut);font-weight:600;font-size:11px;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.imgs td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+.imgs td.f{direction:ltr;font:12px ui-monospace,Menlo,monospace;word-break:break-all;max-width:260px}
+.imgs tr:last-child td{border-bottom:0}
+.imgs .num{white-space:nowrap}
+.tag{display:inline-block;font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:99px;margin:0 4px 3px 0}
+.tag.bad{background:var(--badbg);color:var(--bad)}.tag.mid{background:var(--midbg);color:#b86e00}.tag.good{background:var(--goodbg);color:var(--addtx)}
+.scroll{overflow-x:auto}
 @media(max-width:860px){.app{display:block}aside{position:static;height:auto}}
 @media print{aside,.chips,.tools,.tsearch{display:none}.app{display:block}.audit,.instd{break-inside:avoid}}
 `;
@@ -128,10 +144,11 @@ function codeBox(label,text,cls){
 function inst(f){
  return h('div',{class:'inst'},
   h('p',{class:'why'},f.why),
+  f.facts&&h('table',{class:'facts'},f.facts.map((r)=>h('tr',{},h('td',{},r[0]),h('td',{},r[1])))),
   h('div',{class:'k'},'Where'),h('div',{class:'where'},f.where),
   f.asset&&[h('div',{class:'k'},'File'),h('div',{class:'where'},f.asset)],
   f.evidence&&[h('div',{class:'k'},'What was found on the page'),codeBox(null,f.evidence)],
-  (f.before||f.after)&&h('div',{class:'ba'},f.before&&codeBox('Before (now)',f.before,'del'),f.after&&codeBox('After (fix)',f.after,'add')))}
+  (f.before||f.after)&&h('div',{class:'ba'+(Math.max(...[f.before,f.after].filter(Boolean).flatMap((t)=>t.split('\n').map((l)=>l.length)))>48?' wide':'')},f.before&&codeBox('Before (now)',f.before,'del'),f.after&&codeBox('After (fix)',f.after,'add')))}
 function audit(g){
  const f=g[0],sev=g.reduce((a,x)=>SEV[x.severity]>SEV[a]?x.severity:a,'low');
  return h('details',{class:'audit '+sev},
@@ -150,8 +167,9 @@ function tree(nodes,max,depth,q){
   const kids=n.children.length;
   const tog=h('span',{class:'tog'},kids?(depth>=2?'▸':'▾'):'·');
   const box=h('div',{class:'tkids'},tree(n.children,max,depth+1,q));box.hidden=depth>=2&&!q;
-  const row=h('div',{class:'trow'},tog,h('b',{},'<'+n.name+'>'),h('span',{class:'tbar'},h('i',{style:'width:'+Math.max(3,n.domNodes/max*100)+'%'})),
-   h('span',{class:'tmeta'},n.domNodes+' nodes'),n.renders>15&&h('span',{class:'pill bad'},n.renders+' renders'),n.aboveFold&&h('span',{class:'pill'},'above the fold'));
+  const row=h('div',{class:'trow'},tog,n.minified?h('span',{class:'min',title:'The build renamed this component to "'+n.name+'"'},'‹'+n.name+'› renders <'+(n.hint||'?')+'>'):h('b',{},'<'+n.name+'>'),
+   n.count>1&&h('span',{class:'pill'},'×'+n.count),h('span',{class:'tbar'},h('i',{style:'width:'+Math.max(3,n.domNodes/max*100)+'%'})),
+   h('span',{class:'tmeta'},n.domNodes+' nodes'),n.renders>10&&h('span',{class:'pill bad',title:n.why?('parent only '+n.why.parent+', props '+n.why.props+', own state '+n.why.state+', store '+n.why.store+', context '+n.why.context):''},n.renders+' re-renders'),n.aboveFold&&h('span',{class:'pill'},'above the fold'));
   row.addEventListener('click',()=>{box.hidden=!box.hidden;tog.textContent=kids?(box.hidden?'▸':'▾'):'·'});
   return h('div',{},row,kids?box:null)})}
 function navList(){
@@ -190,7 +208,23 @@ function render(){
  const search=h('input',{class:'tsearch',placeholder:'Search components…',type:'search'});
  search.addEventListener('input',()=>draw(search.value.trim().toLowerCase()));
  draw('');
+ const mimeOf=new Map(s.network.map((x)=>[x.url,x.mime||'']));
+ const dpr=(s.viewport&&s.viewport.dpr)||1;
+ const allImgs=[...s.images].sort((a,b)=>b.bytes-a.bytes);let showAll=false;const imgs=allImgs.slice(0,15);
+ if(imgs.length){
+  const wasted=imgs.reduce((t,i)=>{const need=Math.ceil(i.renderedW*dpr);const r=i.naturalW?Math.min(1,need/i.naturalW):1;return t+i.bytes*(1-r*r)},0);
+  main.append(h('h2',{},'Images',h('span',{class:'pill'},s.images.length),h('span',{class:'pill'},kb(s.images.reduce((t,i)=>t+i.bytes,0))+' total'),wasted>10240&&h('span',{class:'pill bad'},'≈ '+kb(wasted)+' wasted')),
+   h('div',{class:'card scroll'},h('table',{class:'imgs'},
+    h('thead',{},h('tr',{},['File','Shown','Downloaded','Size','Format','Checks'].map((t)=>h('th',{},t)))),
+    h('tbody',{},imgs.map((i)=>{
+     const need=Math.ceil(i.renderedW*dpr),big=i.naturalW>need*1.25&&need>0,mime=(mimeOf.get(i.src)||'').replace('image/','')||'?';
+     const tags=[big?['bad','oversized']:['good','size ok'],(!i.aboveFold&&!i.lazy)?['mid','not lazy']:null,!i.hasSize?['mid','no size']:null,/jpeg|png|gif/.test(mime)&&i.bytes>30720?['mid','old format']:null,i.nextImage?['good','next/image']:['mid','plain img']].filter(Boolean);
+     return h('tr',{},h('td',{class:'f'},(i.owner?'<'+i.owner+'> ':'')+i.src.split('/').slice(-2).join('/').slice(-60)),
+      h('td',{class:'num'},i.renderedW+'×'+(i.displayH||'?')),h('td',{class:'num'},i.naturalW+'×'+(i.naturalH||'?')),h('td',{class:'num'},kb(i.bytes)),h('td',{},mime),
+      h('td',{},tags.map((t)=>h('span',{class:'tag '+t[0]},t[1]))))})))))}
+ const anyMin=flat(s.tree).some((x)=>x.minified);
  main.append(h('h2',{},'Component graph'),
+  anyMin&&h('div',{class:'note'},'Some component names are minified by the build. They are shown as ‹name› with the HTML element they render. For real names run \x60next build --no-mangling\x60 and analyze again.'),
   h('div',{class:'card'},s.tree.length?[search,holder]:h('span',{class:'empty'},'No React component tree was found. The page may not use React, may use only Server Components, or the names are minified. Build once with "next build --no-mangling" for readable names.')))}
 function save(name,text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text]));a.download=name;a.click()}
 function markdown(){
