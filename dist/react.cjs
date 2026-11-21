@@ -1,2 +1,0 @@
-"use client";
-'use strict';var chunk446DKQAF_cjs=require('./chunk-446DKQAF.cjs'),react=require('react');function f(o={}){return react.useEffect(()=>{chunk446DKQAF_cjs.b(o);},[]),null}Object.defineProperty(exports,"init",{enumerable:true,get:function(){return chunk446DKQAF_cjs.b}});exports.Perfscope=f;
