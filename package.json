@@ -1,52 +1,103 @@
 {
   "name": "@moeinmnia/perfscope",
-  "version": "0.5.0",
-  "description": "Per-route React component graph and automatic performance analysis for Next.js/React apps",
-  "type": "module",
-  "bin": {
-    "perfscope": "dist/cli.js"
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
-  "engines": {
-    "node": ">=18.3"
-  },
-  "scripts": {
-    "dev": "tsx src/cli.ts",
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/rules/index.test.ts",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build"
-  },
+  "version": "1.1.0",
+  "description": "A dev-time performance overlay: a small rectangle on your page that audits images, fonts, reflow, repaint, accessibility and the slowest React components while you build. Analysis core in Rust (WebAssembly).",
   "keywords": [
     "performance",
+    "web-vitals",
+    "devtools",
+    "overlay",
+    "lcp",
+    "cls",
+    "images",
+    "accessibility",
     "react",
     "nextjs",
-    "web-vitals",
-    "playwright",
-    "audit"
+    "rust",
+    "wasm"
   ],
   "license": "MIT",
+  "author": "Moein Mohammadnia <moeinmnia80@users.noreply.github.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/moeinmnia80/perfscope.git"
   },
+  "homepage": "https://github.com/moeinmnia80/perfscope#readme",
   "bugs": {
     "url": "https://github.com/moeinmnia80/perfscope/issues"
   },
-  "homepage": "https://github.com/moeinmnia80/perfscope#readme",
-  "dependencies": {
-    "playwright": "^1.48.0"
+  "type": "module",
+  "sideEffects": [
+    "./dist/auto.js",
+    "./dist/auto.cjs"
+  ],
+  "bin": {
+    "perfscope": "bin/perfscope.mjs"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./auto": {
+      "import": {
+        "types": "./dist/auto.d.ts",
+        "default": "./dist/auto.js"
+      },
+      "require": {
+        "types": "./dist/auto.d.cts",
+        "default": "./dist/auto.cjs"
+      }
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/react.d.ts",
+        "default": "./dist/react.js"
+      },
+      "require": {
+        "types": "./dist/react.d.cts",
+        "default": "./dist/react.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "wasm": "node scripts/build-wasm.mjs",
+    "build": "node scripts/build-wasm.mjs && tsup && node scripts/postbuild.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:rust": "cargo test --release --manifest-path rust/Cargo.toml",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=17"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
-  },
-  "publishConfig": {
-    "access": "public"
+    "@types/react": "^19.0.0",
+    "jsdom": "^26.0.0",
+    "react": "^19.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
   }
 }

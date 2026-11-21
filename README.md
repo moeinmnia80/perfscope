@@ -1,44 +1,77 @@
 # @moeinmnia/perfscope
 
-Per-route React component graph + a specialist performance audit, with a Lighthouse-style HTML report.
+A small rectangle on your page that audits what you are building. Development only.
 
-For every problem the report shows **where** it is, **what was measured**, the code **before** and **after**, and exactly what to **remove / add / replace**.
+Open it and it tells you, in one line each: which image to resize (and to what width), which LCP image
+needs priority, what causes layout shift and forced reflow, which animation repaints every frame, which
+font is too heavy, what is not accessible, and which React components cost the most.
 
-## Quick start
+The number crunching is a **Rust core compiled to WebAssembly** (embedded, nothing to configure). A
+JavaScript twin with identical results takes over if WebAssembly is blocked.
+
+## Setup
+
 ```bash
-npx playwright install chromium
-npx @moeinmnia/perfscope https://your-site.com
-# open perfscope-report/report.html
+npx @moeinmnia/perfscope init      # Next.js (App Router) or Vite: edits the right file, idempotent
 ```
+
+or by hand, as the **first import** of your client entry (so React timings are live):
+
+```ts
+import "@moeinmnia/perfscope/auto";
+```
+
+```tsx
+// or as a component
+import { Perfscope } from "@moeinmnia/perfscope/react";
+<Perfscope corner="bottom-left" accent="#ffc247" />;
+```
+
+In a production build it does nothing (pass `force: true` to override). Toggle the panel: **Alt + Shift + P**.
+
+## What it measures
+
+| Area | How |
+| --- | --- |
+| Images | The largest use of a file is the reference (x pixel ratio, capped at 2x). Exact bytes from resource timing, or by downloading the image. Resize target, format, LCP priority, lazy, missing size. "Download WebP" re-encodes it at the target size in the browser. |
+| Layout shift | `layout-shift` entries grouped per element, with the right fix per element type. |
+| Forced reflow | Long Animation Frames: function + file + milliseconds (Chromium). |
+| Repaint / reflow cost | Running animations of layout/paint properties (Web Animations), JS-driven style/class churn, large blur areas, `transition: all`, permanent `will-change`. |
+| Fonts | Size, format, `font-display`, preload, font-swap text reflow, unused faces. |
+| Accessibility | Alt, names, labels, contrast (Rust), tap targets, headings, landmarks, `lang`, zoom. |
+| Practice | DOM size/depth, render-blocking, big scripts, compression, third-party origins. |
+| Components | React's own `actualDuration` per commit: self time, renders, worst, and whether a render happened only because the parent did. Ranked by the Rust core. |
+
+What it cannot know is said in the docs: the browser exposes no repaint counter, cross-origin resources hide
+sizes, React timings exist only in development builds, and the score covers LCP/CLS/INP only.
+
+## Staying fast
+
+Passive observers, scans in 6 ms slices that yield to input (never while hidden, never overlapping), a
+sampled and self-throttling React hook, and a header shader that draws only while the panel is open (half
+resolution, 30 fps, strength 0 = nothing drawn). Every scan reports its own cost in the panel footer.
 
 ## Options
-| flag | description |
-|---|---|
-| `--out <dir>` | output dir (default `perfscope-report`) |
-| `--limit <n>` | max routes to analyze (default 12) |
-| `--desktop` | desktop viewport (default: mobile) |
-| `--no-throttle` | skip Slow 4G + 4x CPU simulation (default: throttled, like Lighthouse mobile) |
-| `--pdf` | also export PDF |
-| `--fail-on <sev>` | exit 1 when findings >= severity (for CI) |
 
-## What it checks
-- **Images**: real LCP element, size vs. what the screen needs (devicePixelRatio aware), `sizes`/`srcset`, lazy-loading, format (WebP/AVIF), layout shift. Gives CDN-specific fixes (TMDB size ladder, Cloudinary, Unsplash/imgix, `next/image`).
-- **Re-renders**: counted per component instance, with the *cause*: parent only, changed props (which ones), own state, external store, or context. The fix matches the cause.
-- **Loading**: JS budget, unused JS/CSS, compression, render-blocking scripts, third-party scripts, fonts, cache headers, preconnect to the image host, TTFB, FCP, TBT, CLS, DOM size.
+`corner`, `accent`, `shader` (0-100), `startOpen`, `watchMutations`, `highlight`, `dense`, `enabled`, `force`,
+`onReport`. All except the last three are also in the panel's Settings tab and are remembered.
 
-## Readable component names
-Production builds minify names (`fp`, `a`). perfscope detects this and describes such components by the HTML element they render. For real names build once with:
-```bash
-next build --no-mangling
+```ts
+import { init } from "@moeinmnia/perfscope";
+const scope = init();
+await scope.scan();
+scope.report()?.findings;
 ```
 
-## Limitations
-- Only client components appear in the Fiber tree (Server Components render no Fiber).
-- Per-component bundle size is not measured (route and chunk level only).
-- The score is an estimate from FCP, LCP, TBT and CLS; use Lighthouse / PageSpeed Insights for the official number.
+## Develop
 
-## Contributing
-Rules are pure functions in `src/rules`: `(RouteSnapshot) => Finding[]`. Add a rule, add a test.
+```bash
+npm i
+npm run test:rust   # Rust unit tests
+npm test            # engine (wasm vs JS) + DOM audits
+npm run build       # compiles rust/ to wasm (needs cargo + wasm32-unknown-unknown), then bundles
+```
 
-## License
+If Rust is not installed, `npm run build` keeps the committed `src/engine/wasm.gen.ts`.
+
 MIT
