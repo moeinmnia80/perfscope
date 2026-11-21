@@ -1,0 +1,2 @@
+"use client";
+import {b}from'./chunk-Q7VHR35V.js';export{b as init}from'./chunk-Q7VHR35V.js';import {useEffect}from'react';function f(o={}){return useEffect(()=>{b(o);},[]),null}export{f as Perfscope};

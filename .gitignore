@@ -1,6 +1,0 @@
-node_modules
-dist
-perfscope-report
-*.log
-.DS_Store
-.env
