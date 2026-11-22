@@ -51,7 +51,15 @@ if (has("next")) {
     const lastImport = lines.map((l, i) => (/^import\s/.test(l) ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
     lines.splice(lastImport + 1, 0, `import { PerfscopeDev } from "${importPath}";`);
     src = lines.join("\n");
-    src = /\{children\}/.test(src) ? src.replace(/\{children\}/, "<PerfscopeDev />\n        {children}") : src.replace(/(<body[^>]*>)/, "$1\n        <PerfscopeDev />");
+    // only touch the JSX: never the `{ children }` in the function signature
+    const body = src.search(/<body[^>]*>/);
+    if (body === -1) {
+      log("no <body> found in the layout. Add <PerfscopeDev /> inside it yourself.");
+    } else {
+      const head = src.slice(0, body);
+      const rest = src.slice(body);
+      src = head + (/\{\s*children\s*\}/.test(rest) ? rest.replace(/\{\s*children\s*\}/, (m) => `<PerfscopeDev />\n        ${m}`) : rest.replace(/(<body[^>]*>)/, "$1\n        <PerfscopeDev />"));
+    }
     write(layout, src);
     log(`wired ${layout.replace(cwd, ".")}`);
   }

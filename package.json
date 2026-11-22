@@ -1,6 +1,6 @@
 {
   "name": "@moeinmnia/perfscope",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A dev-time performance overlay: a small rectangle on your page that audits images, fonts, reflow, repaint, accessibility and the slowest React components while you build. Analysis core in Rust (WebAssembly).",
   "keywords": [
     "performance",
@@ -93,6 +93,7 @@
     }
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
     "@types/react": "^19.0.0",
     "jsdom": "^26.0.0",
     "react": "^19.0.0",
